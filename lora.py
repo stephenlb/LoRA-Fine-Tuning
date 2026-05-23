@@ -2,24 +2,48 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 def LoRA(model):
-
+    ## TODO ✅ FREEZE Laery no_grad = True?
+    ## TODO all layers not just one
+    ## TODO train the model "optimization"
+    ## TODO optimization trick on output from model N=W+AB ( loading the LoRA learnings into the model )
+        ## TODO save old_forward for restoring origin forward
+    ## TODO 
     ## get last layer
-    for layer in list(model.modules())[-1:]:
-        last_layer = layer
-        break
-    shape = last_layer.weight.shape
     rank = 4
     alpha = 16
-    lora_in = torch.nn.Parameter(torch.rand(shape[1], rank))
-    lora_out = torch.nn.Parameter(torch.zeros(rank, shape[0]))
-    def forward(x):
-        ## passthrough
-        print('it worked!!!!!')
-        out = x @ last_layer.weight.T
-        print('out')
-        print(out)
-        return out
-    last_layer.forward = forward
+    layers = []
+    lora_layers = []
+
+    for layer in list(model.modules())[-1:]:
+        kind = type(layer).__name__
+        ## Only work on Linear Layers
+        if kind != 'Linear': continue
+        print(kind)
+        print(layer)
+        layers.append(layer)
+        shape = layer.weight.shape
+        print(shape)
+        original_forward = layer.forward
+        lora_in = torch.nn.Parameter(torch.rand(shape[1], rank, dtype=torch.bfloat16))
+        lora_out = torch.nn.Parameter(torch.zeros(rank, shape[0], dtype=torch.bfloat16))
+        lora_layers.append({
+            'shape': shape,
+            'forward' : original_forward,
+            'in' : lora_in,
+            'out' : lora_out,
+        })
+        def forward(x):
+            out = original_forward(x)
+            lout = x @ lora_in @ lora_out
+            return out + lout
+
+        layer.forward = forward
+
+    #layer = layers[-1]
+    #shape = layer.weight.shape
+    #lora_in = torch.nn.Parameter(torch.rand(shape[1], rank))
+    #lora_out = torch.nn.Parameter(torch.zeros(rank, shape[0]))
+
     return model
 
 accelerator = torch.accelerator.current_accelerator()
@@ -27,7 +51,9 @@ print(accelerator)
 
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B")
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B")
+#model = model.to(accelerator)
 model = LoRA(model)
+model.eval()
 messages = [
     {"role": "user", "content": "Who are you?"},
 ]
